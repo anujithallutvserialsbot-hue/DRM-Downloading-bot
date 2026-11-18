@@ -117,11 +117,6 @@ def get_progress_hook(client, message, user_id, title="Downloading"):
                 last_update_time = current_time
     return progress_hook
 
-# അഡ്മിൻമാർക്ക് മാത്രം ജിയോ ഹോസ്റ്റാർ പ്രീമിയം ആക്സസ് നൽകാനുള്ള കമാൻഡ്
-@filters.not_implemented # Dummy decorator placeholder if needed, uses standard app filters
-async def dummy_func():
-    pass
-
 def register_jiohotstar_handlers(app: Client):
 
     @app.on_message(filters.command("addjiopremium") & filters.private)
@@ -169,6 +164,7 @@ def register_jiohotstar_handlers(app: Client):
                 await message.reply_text("⚠️ Task Limit Reached! You can only download one JioHotstar video at a time. Please wait for your current task to finish.")
                 return
 
+            # -n ഉപയോഗിച്ച് കസ്റ്റം നെയിം എടുക്കുന്നു
             parts = text.split("-n")
             url = url_match.group(0) if url_match else parts[0].strip()
             custom_name = parts[1].strip() if len(parts) > 1 else None
@@ -215,7 +211,8 @@ def register_jiohotstar_handlers(app: Client):
                     "url": url, 
                     "custom_name": custom_name,
                     "languages": detected_langs,
-                    "selected_langs": []
+                    "selected_langs": [],
+                    "info": info
                 }
 
                 yt_thumb_path = None
@@ -224,7 +221,6 @@ def register_jiohotstar_handlers(app: Client):
                 if yt_thumb_path:
                     USER_THUMBNAILS[f"yt_{user_id}"] = yt_thumb_path
 
-                # 2K ഉം 4K ഉം ഉൾപ്പെടെയുള്ള ക്വാളിറ്റി ബട്ടണുകൾ
                 keyboard_buttons = [
                     [
                         InlineKeyboardButton("📹 240p", callback_data="dl|video|240"),
@@ -377,6 +373,7 @@ def register_jiohotstar_handlers(app: Client):
 
         url = user_data["url"]
         custom_name = user_data["custom_name"]
+        info = user_data.get("info", {})
 
         try:
             await callback_query.message.delete()
@@ -414,8 +411,8 @@ def register_jiohotstar_handlers(app: Client):
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     if user_id in CANCEL_REQUESTS:
                         raise Exception("Task cancelled by user.")
-                    info = ydl.extract_info(url, download=True)
-                    return ydl.prepare_filename(info)
+                    inf = ydl.extract_info(url, download=True)
+                    return ydl.prepare_filename(inf)
 
             filename = await asyncio.to_thread(run_download)
 
@@ -426,13 +423,27 @@ def register_jiohotstar_handlers(app: Client):
                 dir_name, orig_filename = os.path.split(filename)
                 _, ext = os.path.splitext(orig_filename)
                 
+                # -n കൊടുത്തിട്ടുണ്ടെങ്കിൽ ആ പേര് ഉപയോഗിക്കും, അല്ലെങ്കിൽ ഒറിജിനൽ പാറ്റേൺ
                 if custom_name:
-                    safe_custom_name = custom_name.replace("/", "_").replace("\\", "_")
-                    new_filename = os.path.join(dir_name, f"{safe_custom_name}_MULTI{ext}")
-                    if os.path.exists(new_filename):
-                        os.remove(new_filename)
-                    os.rename(filename, new_filename)
-                    filename = new_filename
+                    safe_custom = custom_name.replace(" ", ".").replace("/", "_")
+                    audio_tag = langs_str.replace(", ", ".")
+                    new_filename = os.path.join(dir_name, f"{safe_custom}.{quality}p.HS.WEB-DL.{audio_tag}{ext}")
+                else:
+                    title = info.get('title', 'OTT_Video')
+                    series = info.get('series') or info.get('tv_show') or title
+                    season_number = info.get('season_number', 1)
+                    episode_number = info.get('episode_number', 1)
+                    s_num = f"S{int(season_number):02d}" if season_number else "S01"
+                    e_num = f"E{int(episode_number):03d}" if episode_number else "E001"
+                    clean_title = re.sub(r'[^\w\s]', '', title).replace(" ", ".")
+                    clean_series = re.sub(r'[^\w\s]', '', series).replace(" ", ".")
+                    audio_tag = langs_str.replace(", ", ".")
+                    new_filename = os.path.join(dir_name, f"{clean_series}.{s_num}{e_num}.{clean_title}.{quality}p.HS.WEB-DL.{audio_tag}{ext}")
+
+                if os.path.exists(new_filename):
+                    os.remove(new_filename)
+                os.rename(filename, new_filename)
+                filename = new_filename
 
             await status_msg.edit_text("📤 Uploading to Telegram...", reply_markup=cancel_keyboard)
 
@@ -453,7 +464,7 @@ def register_jiohotstar_handlers(app: Client):
                 file_name=file_name,
                 duration=duration,
                 thumb=thumb_path,
-                caption=f"📹 Here is your OTT Video ({quality} - Audios: {langs_str})"
+                caption=f"📹 <b>{file_name}</b>"
             )
 
             await status_msg.delete()
@@ -504,6 +515,7 @@ def register_jiohotstar_handlers(app: Client):
 
         url = user_data["url"]
         custom_name = user_data["custom_name"]
+        info = user_data.get("info", {})
 
         try:
             await callback_query.message.delete()
@@ -542,8 +554,8 @@ def register_jiohotstar_handlers(app: Client):
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     if user_id in CANCEL_REQUESTS:
                         raise Exception("Task cancelled by user.")
-                    info = ydl.extract_info(url, download=True)
-                    return ydl.prepare_filename(info)
+                    inf = ydl.extract_info(url, download=True)
+                    return ydl.prepare_filename(inf)
 
             filename = await asyncio.to_thread(run_download)
 
@@ -554,13 +566,26 @@ def register_jiohotstar_handlers(app: Client):
                 dir_name, orig_filename = os.path.split(filename)
                 _, ext = os.path.splitext(orig_filename)
                 
+                audio_str = "Multi-Audio" if selected_audio == "all" else selected_audio.upper()
+
                 if custom_name:
-                    safe_custom_name = custom_name.replace("/", "_").replace("\\", "_")
-                    new_filename = os.path.join(dir_name, f"{safe_custom_name}_{selected_audio.upper()}{ext}")
-                    if os.path.exists(new_filename):
-                        os.remove(new_filename)
-                    os.rename(filename, new_filename)
-                    filename = new_filename
+                    safe_custom = custom_name.replace(" ", ".").replace("/", "_")
+                    new_filename = os.path.join(dir_name, f"{safe_custom}.{quality}p.HS.WEB-DL.{audio_str}{ext}")
+                else:
+                    title = info.get('title', 'OTT_Video')
+                    series = info.get('series') or info.get('tv_show') or title
+                    season_number = info.get('season_number', 1)
+                    episode_number = info.get('episode_number', 1)
+                    s_num = f"S{int(season_number):02d}" if season_number else "S01"
+                    e_num = f"E{int(episode_number):03d}" if episode_number else "E001"
+                    clean_title = re.sub(r'[^\w\s]', '', title).replace(" ", ".")
+                    clean_series = re.sub(r'[^\w\s]', '', series).replace(" ", ".")
+                    new_filename = os.path.join(dir_name, f"{clean_series}.{s_num}{e_num}.{clean_title}.{quality}p.HS.WEB-DL.{audio_str}{ext}")
+
+                if os.path.exists(new_filename):
+                    os.remove(new_filename)
+                os.rename(filename, new_filename)
+                filename = new_filename
 
             await status_msg.edit_text("📤 Uploading to Telegram...", reply_markup=cancel_keyboard)
 
@@ -581,7 +606,7 @@ def register_jiohotstar_handlers(app: Client):
                 file_name=file_name,
                 duration=duration,
                 thumb=thumb_path,
-                caption=f"📹 Here is your OTT Video ({quality} - Audio: {selected_audio.upper()})"
+                caption=f"📹 <b>{file_name}</b>"
             )
 
             await status_msg.delete()
