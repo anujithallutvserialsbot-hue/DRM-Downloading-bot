@@ -76,6 +76,37 @@ def generate_thumbnail(video_path, user_id):
         logger.error(f"Error generating thumbnail: {e}")
     return None
 
+def build_hotstar_output_name(original_filename, custom_name, quality, audio_tag):
+    """Keep the extractor's original base name unless -n supplies a replacement.
+
+    The quality/source/audio suffix is always retained, e.g.
+    Ee Puzhayum Kadannu.1440p.HS.WEB-DL.MAL.mp4
+    """
+    directory = os.path.dirname(original_filename) or "downloads"
+    extension = os.path.splitext(original_filename)[1] or ".mp4"
+
+    if custom_name:
+        base = os.path.basename(custom_name.strip())
+        # Avoid adding a second extension when the user includes one in -n.
+        if os.path.splitext(base)[1].lower() in {".mp4", ".mkv", ".webm", ".mov"}:
+            base = os.path.splitext(base)[0]
+        # Preserve spaces; remove only characters unsafe in filenames.
+        base = re.sub(r'[\\/:*?"<>|]+', "_", base).strip().strip(".")
+    else:
+        base = os.path.splitext(os.path.basename(original_filename))[0]
+
+    if not base:
+        base = "OTT_Video"
+
+    suffix = f".{quality}p.HS.WEB-DL.{audio_tag}"
+    # Prevent duplicate suffixes if a source filename already contains it.
+    if base.lower().endswith(suffix.lower()):
+        final_base = base
+    else:
+        final_base = base + suffix
+    return os.path.join(directory, final_base + extension)
+
+
 def get_progress_bar(percentage):
     try:
         pct = float(percentage.replace('%', '').strip())
@@ -117,10 +148,38 @@ def get_progress_hook(client, message, user_id, title="Downloading"):
                 last_update_time = current_time
     return progress_hook
 
-def register_jiohotstar_handlers(app: Client):
+def register_jiohotstar_handlers(app: Client, premium_check=None, admin_ids=None):
+    """Register JioHotstar handlers with the bot's shared subscription system."""
+    premium_check = premium_check or (lambda _user_id: False)
+    admin_ids = set(admin_ids or [])
+
+    def is_admin(user_id):
+        return user_id in admin_ids
+
+    def has_jio_access(user_id):
+        # Jio-only grants are retained for admin-managed access; normal plans
+        # are checked through the main bot's shared premium system.
+        try:
+            return is_admin(user_id) or user_id in JIO_PREMIUM_USERS or bool(premium_check(user_id))
+        except Exception:
+            logger.exception("Could not verify premium status for user %s", user_id)
+            return False
+
+    def task_limit_reached(user_id):
+        return not is_admin(user_id) and user_id in ACTIVE_JIO_TASKS
+
+    def reserve_task(user_id):
+        # Admin/setup accounts are unlimited; regular premium accounts get one
+        # active JioHotstar task at a time.
+        if not is_admin(user_id):
+            ACTIVE_JIO_TASKS.add(user_id)
+
 
     @app.on_message(filters.command("addjiopremium") & filters.private)
     async def add_jio_premium(client, message):
+        if not is_admin(message.from_user.id):
+            await message.reply_text("⛔ Only admins can grant JioHotstar access.")
+            return
         args = message.command[1:]
         if not args:
             await message.reply_text("❌ Usage: /addjiopremium <user_id>")
@@ -138,8 +197,9 @@ def register_jiohotstar_handlers(app: Client):
         user_id = callback_query.from_user.id
         target_user_id = int(callback_query.data.split("_")[2])
         if user_id == target_user_id:
+            # Keep the task slot reserved until the download's finally block
+            # has actually stopped and released it.
             CANCEL_REQUESTS.add(target_user_id)
-            ACTIVE_JIO_TASKS.discard(target_user_id)
             await callback_query.answer("⚠️ Task cancellation requested...", show_alert=True)
         else:
             await callback_query.answer("❌ You are not authorized to cancel this task!", show_alert=True)
@@ -158,14 +218,19 @@ def register_jiohotstar_handlers(app: Client):
         # ജിയോ ഹോസ്റ്റാർ ലിങ്ക് ആണോ എന്ന് പരിശോധിക്കുന്നു
         if any(p in extracted_url for p in ["hotstar.com", "jiocinema.com", "jiohotstar.com"]):
             
-            # ജിയോ പ്രീമിയം ആക്സസ് പരിശോധന
-            if JIO_PREMIUM_USERS and user_id not in JIO_PREMIUM_USERS:
-                await message.reply_text("⛔ You do not have JioHotstar Premium access. Contact admin.")
+            # Use the same /plan, /redeem and /addpremium subscription state
+            # as the rest of the bot. Free users are blocked before info fetch.
+            if not has_jio_access(user_id):
+                await message.reply_text(
+                    "🔒 You haven't subscribed yet.\n\n"
+                    "Check /plan and contact the owner to get a subscription."
+                )
                 return
 
-            # ഒരേ സമയം ഒരു ടാസ്ക് മാത്രം അനുവദിക്കുന്നതിനുള്ള പരിശോധന (Task Limit)
-            if user_id in ACTIVE_JIO_TASKS:
-                await message.reply_text("⚠️ Task Limit Reached! You can only download one JioHotstar video at a time. Please wait for your current task to finish.")
+            # Regular premium users: one active JioHotstar task at a time.
+            # Admin/setup accounts are exempt.
+            if task_limit_reached(user_id):
+                await message.reply_text("⚠️ Task Limit Reached! You can download only one JioHotstar video at a time. Please wait for your current task to finish.")
                 return
 
             # -n ഉപയോഗിച്ച് കസ്റ്റം നെയിം എടുക്കുന്നു
@@ -284,6 +349,9 @@ def register_jiohotstar_handlers(app: Client):
 
     @app.on_callback_query(filters.regex(r"^dl\|video\|"))
     async def select_audio_languages(client, callback_query: CallbackQuery):
+        if not has_jio_access(callback_query.from_user.id):
+            await callback_query.answer("🔒 You haven't subscribed yet. Check /plan and contact the owner.", show_alert=True)
+            return
         data_parts = callback_query.data.split("|")
         quality = data_parts[2]
         
@@ -373,14 +441,17 @@ def register_jiohotstar_handlers(app: Client):
     @app.on_callback_query(filters.regex(r"^dl\|audio\|mp3\|"))
     async def download_mp3_audio(client, callback_query: CallbackQuery):
         user_id = callback_query.from_user.id
+        if not has_jio_access(user_id):
+            await callback_query.answer("🔒 You haven't subscribed yet. Check /plan and contact the owner.", show_alert=True)
+            return
         user_data = USER_URLS.get(user_id)
         if not user_data:
             await callback_query.answer("Link expired. Send it again.", show_alert=True)
             return
-        if user_id in ACTIVE_JIO_TASKS:
-            await callback_query.answer("A download is already running.", show_alert=True)
+        if task_limit_reached(user_id):
+            await callback_query.answer("⚠️ Task Limit Reached! Finish your current JioHotstar download before starting another.", show_alert=True)
             return
-        ACTIVE_JIO_TASKS.add(user_id)
+        reserve_task(user_id)
         url = user_data["url"]
         status_msg = await callback_query.message.reply_text("⏳ Preparing MP3 audio download...")
         filename = None
@@ -421,15 +492,18 @@ def register_jiohotstar_handlers(app: Client):
 
     @app.on_callback_query(filters.regex(r"^dl_final_multi\|"))
     async def download_multi_selected_media(client, callback_query: CallbackQuery):
+        if not has_jio_access(callback_query.from_user.id):
+            await callback_query.answer("🔒 You haven't subscribed yet. Check /plan and contact the owner.", show_alert=True)
+            return
         data_parts = callback_query.data.split("|")
         quality = data_parts[1]
         
         user_id = callback_query.from_user.id
         
-        if user_id in ACTIVE_JIO_TASKS:
-            await callback_query.answer("⚠️ Task Limit Reached! You can only download one JioHotstar video at a time.", show_alert=True)
+        if task_limit_reached(user_id):
+            await callback_query.answer("⚠️ Task Limit Reached! Finish your current JioHotstar download before starting another.", show_alert=True)
             return
-        ACTIVE_JIO_TASKS.add(user_id)
+        reserve_task(user_id)
 
         user_data = USER_URLS.get(user_id)
         if not user_data:
@@ -495,29 +569,12 @@ def register_jiohotstar_handlers(app: Client):
                 raise Exception("Task cancelled by user.")
 
             if filename and os.path.exists(filename):
-                dir_name, orig_filename = os.path.split(filename)
-                _, ext = os.path.splitext(orig_filename)
-                
-                # -n കൊടുത്തിട്ടുണ്ടെങ്കിൽ ആ പേര് ഉപയോഗിക്കും, അല്ലെങ്കിൽ ഒറിജിനൽ പാറ്റേൺ
-                if custom_name:
-                    safe_custom = custom_name.replace(" ", ".").replace("/", "_")
-                    audio_tag = langs_str.replace(", ", ".")
-                    new_filename = os.path.join(dir_name, f"{safe_custom}.{quality}p.HS.WEB-DL.{audio_tag}{ext}")
-                else:
-                    title = info.get('title', 'OTT_Video')
-                    series = info.get('series') or info.get('tv_show') or title
-                    season_number = info.get('season_number', 1)
-                    episode_number = info.get('episode_number', 1)
-                    s_num = f"S{int(season_number):02d}" if season_number else "S01"
-                    e_num = f"E{int(episode_number):03d}" if episode_number else "E001"
-                    clean_title = re.sub(r'[^\w\s]', '', title).replace(" ", ".")
-                    clean_series = re.sub(r'[^\w\s]', '', series).replace(" ", ".")
-                    audio_tag = langs_str.replace(", ", ".")
-                    new_filename = os.path.join(dir_name, f"{clean_series}.{s_num}{e_num}.{clean_title}.{quality}p.HS.WEB-DL.{audio_tag}{ext}")
-
-                if os.path.exists(new_filename):
-                    os.remove(new_filename)
-                os.rename(filename, new_filename)
+                audio_tag = langs_str.replace(", ", ".")
+                new_filename = build_hotstar_output_name(filename, custom_name, quality, audio_tag)
+                if os.path.abspath(filename) != os.path.abspath(new_filename):
+                    if os.path.exists(new_filename):
+                        os.remove(new_filename)
+                    os.rename(filename, new_filename)
                 filename = new_filename
 
             await status_msg.edit_text("📤 Uploading to Telegram...", reply_markup=cancel_keyboard)
@@ -571,16 +628,19 @@ def register_jiohotstar_handlers(app: Client):
 
     @app.on_callback_query(filters.regex(r"^dl_final\|"))
     async def download_final_media(client, callback_query: CallbackQuery):
+        if not has_jio_access(callback_query.from_user.id):
+            await callback_query.answer("🔒 You haven't subscribed yet. Check /plan and contact the owner.", show_alert=True)
+            return
         data_parts = callback_query.data.split("|")
         quality = data_parts[1]
         selected_audio = data_parts[2]
         
         user_id = callback_query.from_user.id
         
-        if user_id in ACTIVE_JIO_TASKS:
-            await callback_query.answer("⚠️ Task Limit Reached! You can only download one JioHotstar video at a time.", show_alert=True)
+        if task_limit_reached(user_id):
+            await callback_query.answer("⚠️ Task Limit Reached! Finish your current JioHotstar download before starting another.", show_alert=True)
             return
-        ACTIVE_JIO_TASKS.add(user_id)
+        reserve_task(user_id)
 
         user_data = USER_URLS.get(user_id)
         if not user_data:
@@ -641,28 +701,12 @@ def register_jiohotstar_handlers(app: Client):
                 raise Exception("Task cancelled by user.")
 
             if filename and os.path.exists(filename):
-                dir_name, orig_filename = os.path.split(filename)
-                _, ext = os.path.splitext(orig_filename)
-                
                 audio_str = "Multi-Audio" if selected_audio == "all" else selected_audio.upper()
-
-                if custom_name:
-                    safe_custom = custom_name.replace(" ", ".").replace("/", "_")
-                    new_filename = os.path.join(dir_name, f"{safe_custom}.{quality}p.HS.WEB-DL.{audio_str}{ext}")
-                else:
-                    title = info.get('title', 'OTT_Video')
-                    series = info.get('series') or info.get('tv_show') or title
-                    season_number = info.get('season_number', 1)
-                    episode_number = info.get('episode_number', 1)
-                    s_num = f"S{int(season_number):02d}" if season_number else "S01"
-                    e_num = f"E{int(episode_number):03d}" if episode_number else "E001"
-                    clean_title = re.sub(r'[^\w\s]', '', title).replace(" ", ".")
-                    clean_series = re.sub(r'[^\w\s]', '', series).replace(" ", ".")
-                    new_filename = os.path.join(dir_name, f"{clean_series}.{s_num}{e_num}.{clean_title}.{quality}p.HS.WEB-DL.{audio_str}{ext}")
-
-                if os.path.exists(new_filename):
-                    os.remove(new_filename)
-                os.rename(filename, new_filename)
+                new_filename = build_hotstar_output_name(filename, custom_name, quality, audio_str)
+                if os.path.abspath(filename) != os.path.abspath(new_filename):
+                    if os.path.exists(new_filename):
+                        os.remove(new_filename)
+                    os.rename(filename, new_filename)
                 filename = new_filename
 
             await status_msg.edit_text("📤 Uploading to Telegram...", reply_markup=cancel_keyboard)

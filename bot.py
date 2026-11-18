@@ -49,7 +49,12 @@ LOG_CHANNEL_ID = int(os.environ.get("LOG_CHANNEL_ID", "-1004441596603"))
 ALLOWED_GROUP_ID = int(os.environ.get("ALLOWED_GROUP_ID", "0"))
 
 ADMIN_ID = 1727225499
-ADMINS = [ADMIN_ID]
+# Add extra trusted setup/admin user IDs in .env as ADMIN_IDS=123456,789012
+_extra_admin_ids = {
+    int(value.strip()) for value in os.environ.get("ADMIN_IDS", "").split(",")
+    if value.strip().isdigit()
+}
+ADMINS = sorted({ADMIN_ID, *_extra_admin_ids})
 
 # Footer Branding Blockquote Format
 def get_branding_footer():
@@ -90,7 +95,7 @@ app = Client("LeechBot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
 # Register plugin handlers immediately so OTT links/callbacks are matched before generic handlers.
 register_leech_handlers(app)
-register_jiohotstar_handlers(app)
+register_jiohotstar_handlers(app, premium_check=lambda user_id: is_premium(user_id), admin_ids=ADMINS)
 
 USER_THUMBNAILS = {}
 WAITING_FOR_THUMB = set()
@@ -312,7 +317,7 @@ def get_youtube_cookie_file():
     return "youtube_cookies.txt" if os.path.isfile("youtube_cookies.txt") else None
 
 def is_premium(user_id):
-    if user_id == ADMIN_ID:
+    if user_id in ADMINS:
         return True
     if user_id in PREMIUM_USERS:
         if time.time() < PREMIUM_USERS[user_id]:
