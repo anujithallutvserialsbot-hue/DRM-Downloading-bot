@@ -55,7 +55,7 @@ def get_branding_footer():
 # Premium, Referral & Payment Variables
 REFERAL_COUNT = int(os.environ.get('REFERAL_COUNT', '20'))
 REFERAL_PREMEIUM_TIME = os.environ.get('REFERAL_PREMEIUM_TIME', '1month')
-PAYMENT_QR = os.environ.get('PAYMENT_QR', 'https://ibb.co/xtr2Bb71')
+PAYMENT_QR = os.environ.get('PAYMENT_QR', 'https://ibb.co/678cqzZb')
 PAYMENT_TEXT = os.environ.get('PAYMENT_TEXT', '<b>✨ ᴀᴠᴀɪʟᴀʙʟᴇ ᴘʟᴀɴꜱ ❤️ ✨\n\n• 20ʀs - 1 ᴅᴀʏ\n• 60ʀs - 7 ᴅᴀʏꜱ\n• 120ʀs - 12 ᴅᴀʏꜱ\n• 260ʀs - 28 ᴅᴀʏꜱ\n\n🎁 <u>ᴘʀᴇᴍɪᴜᴍ ғᴇᴀᴛᴜʀᴇs</u> 🎁\n\n• Full Admin Support\n• Full Quality\n• Direct Files\n\n🚀 If you are interested in taking these plans, please contact the admin via the button below! 👇</b>')
 ')
 OWNER_USERNAME = os.environ.get('OWNER_USERNAME', 'Allu_Otts_Support')
