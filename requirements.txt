@@ -1,7 +1,6 @@
-pyrogram
+pyrogram>=2.0.106
 tgcrypto
 aiohttp
-git+https://github.com/yt-dlp/yt-dlp.git
 ffmpeg-python
 pytz
 requests
@@ -9,7 +8,5 @@ beautifulsoup4
 pathvalidate
 curl_cffi
 terabox-downloader
-
-pyrogram>=2.0.106
-tgcrypto
-yt-dlp
+hachoir
+git+https://github.com/yt-dlp/yt-dlp.git

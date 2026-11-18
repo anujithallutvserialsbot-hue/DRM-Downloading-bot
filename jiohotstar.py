@@ -30,6 +30,65 @@ USER_URLS = {}
 USER_THUMBNAILS = {}
 CANCEL_REQUESTS = set()
 
+
+
+def build_hotstar_format_selector(info, quality, selected_audio=None):
+    """Build a selector from formats actually advertised by the extractor.
+
+    Hotstar's available format IDs can change between titles. Never assume that
+    every requested resolution or language exists; use the closest available
+    non-DRM format and finally yt-dlp's best fallback.
+    """
+    formats = info.get("formats") or []
+    try:
+        max_height = int(quality)
+    except (TypeError, ValueError):
+        max_height = 0
+
+    usable = [f for f in formats if f.get("format_id") and not f.get("has_drm")]
+    if not usable:
+        return f"bestvideo[height<={max_height}]+bestaudio/best[height<={max_height}]/best" if max_height else "bestvideo+bestaudio/best"
+
+    def height(f):
+        try:
+            return int(f.get("height") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    videos = [f for f in usable if f.get("vcodec") not in (None, "none")]
+    audios = [f for f in usable if f.get("acodec") not in (None, "none")]
+    combined = [f for f in usable if f.get("vcodec") not in (None, "none") and f.get("acodec") not in (None, "none")]
+
+    if max_height and videos:
+        under = [f for f in videos if height(f) <= max_height]
+        videos = under or videos
+        videos.sort(key=lambda f: (height(f), float(f.get("tbr") or 0)), reverse=True)
+    else:
+        videos.sort(key=lambda f: (height(f), float(f.get("tbr") or 0)), reverse=True)
+
+    if selected_audio and selected_audio != "all":
+        matching = [f for f in audios if (f.get("language") or "").lower() == selected_audio.lower()]
+        if matching:
+            audios = matching
+    audios.sort(key=lambda f: float(f.get("abr") or f.get("tbr") or 0), reverse=True)
+
+    # Prefer a single combined format when the extractor provides one.
+    if combined:
+        combined.sort(key=lambda f: (height(f), float(f.get("tbr") or 0)), reverse=True)
+        if max_height:
+            within = [f for f in combined if height(f) <= max_height]
+            if within:
+                return str(within[0]["format_id"])
+        return str(combined[0]["format_id"])
+
+    if videos and audios:
+        return f"{videos[0]['format_id']}+{audios[0]['format_id']}/best"
+    if videos:
+        return f"{videos[0]['format_id']}/best"
+    if audios:
+        return str(audios[0]["format_id"])
+    return "best"
+
 def get_video_duration(file_path):
     try:
         parser = createParser(file_path)
@@ -398,13 +457,18 @@ def register_jiohotstar_handlers(app: Client):
             reply_markup=cancel_keyboard
         )
 
-        audio_selector = "+".join([f"bestaudio[language={l}]" for l in selected_langs])
-        format_str = f'bestvideo[height<={quality}]+({audio_selector})/best[height<={quality}]/best'
+        format_str = build_hotstar_format_selector(info, quality, selected_langs[0] if len(selected_langs) == 1 else "all")
 
         ydl_opts = {
             'format': format_str,
             'outtmpl': 'downloads/%(title)s.%(ext)s',
             'progress_hooks': [get_progress_hook(client, status_msg, user_id, f"Downloading {quality} Video")],
+            'noplaylist': True,
+            'quiet': True,
+            'no_warnings': False,
+            'retries': 5,
+            'fragment_retries': 5,
+            'extractor_retries': 3,
         }
 
         cookie_file_path = get_hotstar_cookie_file()
@@ -481,7 +545,12 @@ def register_jiohotstar_handlers(app: Client):
             if user_id in CANCEL_REQUESTS or "cancelled" in str(e).lower():
                 await status_msg.edit_text("❌ Task Cancelled successfully!")
             else:
-                await status_msg.edit_text(f"❌ Download failed: {str(e)}")
+                error_text = str(e)
+                if "requested format is not available" in error_text.lower():
+                    error_text += "\n\nHotstar did not provide a matching downloadable format for this title. Try a lower quality, update yt-dlp, and confirm the title is playable with your own logged-in account."
+                elif "410" in error_text or "gone" in error_text.lower():
+                    error_text += "\n\nHotstar returned HTTP 410 (Gone). This is an extractor/service response, not a quality-button issue. Update yt-dlp and retry; if it persists, the title/API may currently be unavailable."
+                await status_msg.edit_text(f"❌ Download failed: {error_text[:3500]}")
         finally:
             ACTIVE_JIO_TASKS.discard(user_id)
             if filename and os.path.exists(filename):
@@ -540,15 +609,18 @@ def register_jiohotstar_handlers(app: Client):
             reply_markup=cancel_keyboard
         )
 
-        if selected_audio == "all":
-            format_str = f'bestvideo[height<={quality}]+bestaudio/best[height<={quality}]/best'
-        else:
-            format_str = f'bestvideo[height<={quality}]+bestaudio[language={selected_audio}]/best[height<={quality}]/best'
+        format_str = build_hotstar_format_selector(info, quality, selected_audio)
 
         ydl_opts = {
             'format': format_str,
             'outtmpl': 'downloads/%(title)s.%(ext)s',
             'progress_hooks': [get_progress_hook(client, status_msg, user_id, f"Downloading {quality} Video")],
+            'noplaylist': True,
+            'quiet': True,
+            'no_warnings': False,
+            'retries': 5,
+            'fragment_retries': 5,
+            'extractor_retries': 3,
         }
 
         cookie_file_path = get_hotstar_cookie_file()
@@ -624,7 +696,12 @@ def register_jiohotstar_handlers(app: Client):
             if user_id in CANCEL_REQUESTS or "cancelled" in str(e).lower():
                 await status_msg.edit_text("❌ Task Cancelled successfully!")
             else:
-                await status_msg.edit_text(f"❌ Download failed: {str(e)}")
+                error_text = str(e)
+                if "requested format is not available" in error_text.lower():
+                    error_text += "\n\nHotstar did not provide a matching downloadable format for this title. Try a lower quality, update yt-dlp, and confirm the title is playable with your own logged-in account."
+                elif "410" in error_text or "gone" in error_text.lower():
+                    error_text += "\n\nHotstar returned HTTP 410 (Gone). This is an extractor/service response, not a quality-button issue. Update yt-dlp and retry; if it persists, the title/API may currently be unavailable."
+                await status_msg.edit_text(f"❌ Download failed: {error_text[:3500]}")
         finally:
             ACTIVE_JIO_TASKS.discard(user_id)
             if filename and os.path.exists(filename):
