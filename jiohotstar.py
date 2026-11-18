@@ -15,13 +15,6 @@ from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQ
 
 logger = logging.getLogger(__name__)
 
-def get_hotstar_cookie_file():
-    """Use cookies explicitly supplied by the bot owner; never bypass login/DRM."""
-    for candidate in (os.environ.get("JIOHOTSTAR_COOKIES"), os.environ.get("COOKIES_FILE"), "cookies.txt"):
-        if candidate and os.path.isfile(candidate) and os.path.getsize(candidate) > 0:
-            return candidate
-    return None
-
 # ജിയോ ഹോസ്റ്റാർ പ്രീമിയം ആക്സസ് ഉള്ള യൂസർമാരുടെ IDs ഉം ആക്ടീവ് ടാസ്കുകളും
 JIO_PREMIUM_USERS = set()
 ACTIVE_JIO_TASKS = set()
@@ -29,65 +22,6 @@ ACTIVE_JIO_TASKS = set()
 USER_URLS = {}
 USER_THUMBNAILS = {}
 CANCEL_REQUESTS = set()
-
-
-
-def build_hotstar_format_selector(info, quality, selected_audio=None):
-    """Build a selector from formats actually advertised by the extractor.
-
-    Hotstar's available format IDs can change between titles. Never assume that
-    every requested resolution or language exists; use the closest available
-    non-DRM format and finally yt-dlp's best fallback.
-    """
-    formats = info.get("formats") or []
-    try:
-        max_height = int(quality)
-    except (TypeError, ValueError):
-        max_height = 0
-
-    usable = [f for f in formats if f.get("format_id") and not f.get("has_drm")]
-    if not usable:
-        return f"bestvideo[height<={max_height}]+bestaudio/best[height<={max_height}]/best" if max_height else "bestvideo+bestaudio/best"
-
-    def height(f):
-        try:
-            return int(f.get("height") or 0)
-        except (TypeError, ValueError):
-            return 0
-
-    videos = [f for f in usable if f.get("vcodec") not in (None, "none")]
-    audios = [f for f in usable if f.get("acodec") not in (None, "none")]
-    combined = [f for f in usable if f.get("vcodec") not in (None, "none") and f.get("acodec") not in (None, "none")]
-
-    if max_height and videos:
-        under = [f for f in videos if height(f) <= max_height]
-        videos = under or videos
-        videos.sort(key=lambda f: (height(f), float(f.get("tbr") or 0)), reverse=True)
-    else:
-        videos.sort(key=lambda f: (height(f), float(f.get("tbr") or 0)), reverse=True)
-
-    if selected_audio and selected_audio != "all":
-        matching = [f for f in audios if (f.get("language") or "").lower() == selected_audio.lower()]
-        if matching:
-            audios = matching
-    audios.sort(key=lambda f: float(f.get("abr") or f.get("tbr") or 0), reverse=True)
-
-    # Prefer a single combined format when the extractor provides one.
-    if combined:
-        combined.sort(key=lambda f: (height(f), float(f.get("tbr") or 0)), reverse=True)
-        if max_height:
-            within = [f for f in combined if height(f) <= max_height]
-            if within:
-                return str(within[0]["format_id"])
-        return str(combined[0]["format_id"])
-
-    if videos and audios:
-        return f"{videos[0]['format_id']}+{audios[0]['format_id']}/best"
-    if videos:
-        return f"{videos[0]['format_id']}/best"
-    if audios:
-        return str(audios[0]["format_id"])
-    return "best"
 
 def get_video_duration(file_path):
     try:
@@ -210,7 +144,11 @@ def register_jiohotstar_handlers(app: Client):
         else:
             await callback_query.answer("❌ You are not authorized to cancel this task!", show_alert=True)
 
-    @app.on_message(filters.private & ~filters.command(["start", "help", "platforms", "rip", "status", "cancel", "addjiopremium"]))
+    @app.on_message(
+        filters.private
+        & filters.regex(r"https?://[^\s]*(?:hotstar\.com|jiocinema\.com|jiohotstar\.com)")
+        & ~filters.command(["start", "help", "platforms", "rip", "status", "cancel", "addjiopremium"])
+    )
     async def handle_user_inputs(client, message):
         user_id = message.from_user.id
         text = message.text.strip() if message.text else ""
@@ -237,7 +175,9 @@ def register_jiohotstar_handlers(app: Client):
 
             status_msg = await message.reply_text("⏳ Fetching video info, thumbnail & auto-detecting audio languages...")
 
-            cookie_file_path = get_hotstar_cookie_file()
+            cookie_file_path = os.getenv("JIOHOTSTAR_COOKIES")
+            if not cookie_file_path or not os.path.isfile(cookie_file_path):
+                cookie_file_path = "cookies.txt" if os.path.isfile("cookies.txt") else None
 
             try:
                 ydl_opts = {
@@ -324,6 +264,23 @@ def register_jiohotstar_handlers(app: Client):
                 await status_msg.edit_text(f"❌ Could not fetch video info.\n\nReason: <code>{html.escape(str(e)[:500])}</code>", parse_mode="html")
         else:
             return
+
+    @app.on_callback_query(filters.regex(r"^back_to_quality$"))
+    async def back_to_quality(client, callback_query: CallbackQuery):
+        user_id = callback_query.from_user.id
+        user_data = USER_URLS.get(user_id)
+        if not user_data:
+            await callback_query.answer("Session expired. Send the link again.", show_alert=True)
+            return
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📹 240p", callback_data="dl|video|240"), InlineKeyboardButton("📹 360p", callback_data="dl|video|360")],
+            [InlineKeyboardButton("📹 480p", callback_data="dl|video|480"), InlineKeyboardButton("📹 576p", callback_data="dl|video|576")],
+            [InlineKeyboardButton("📹 720p", callback_data="dl|video|720"), InlineKeyboardButton("📹 1080p", callback_data="dl|video|1080")],
+            [InlineKeyboardButton("📹 1440p (2K)", callback_data="dl|video|1440"), InlineKeyboardButton("📹 2160p (4K)", callback_data="dl|video|2160")],
+            [InlineKeyboardButton("🎵 Extract MP3 Audio", callback_data="dl|audio|mp3|all")]
+        ])
+        await callback_query.message.edit_reply_markup(reply_markup=keyboard)
+        await callback_query.answer()
 
     @app.on_callback_query(filters.regex(r"^dl\|video\|"))
     async def select_audio_languages(client, callback_query: CallbackQuery):
@@ -413,6 +370,55 @@ def register_jiohotstar_handlers(app: Client):
             reply_markup=InlineKeyboardMarkup(audio_buttons)
         )
 
+    @app.on_callback_query(filters.regex(r"^dl\|audio\|mp3\|"))
+    async def download_mp3_audio(client, callback_query: CallbackQuery):
+        user_id = callback_query.from_user.id
+        user_data = USER_URLS.get(user_id)
+        if not user_data:
+            await callback_query.answer("Link expired. Send it again.", show_alert=True)
+            return
+        if user_id in ACTIVE_JIO_TASKS:
+            await callback_query.answer("A download is already running.", show_alert=True)
+            return
+        ACTIVE_JIO_TASKS.add(user_id)
+        url = user_data["url"]
+        status_msg = await callback_query.message.reply_text("⏳ Preparing MP3 audio download...")
+        filename = None
+        try:
+            os.makedirs("downloads", exist_ok=True)
+            opts = {
+                "format": "bestaudio/best",
+                "outtmpl": "downloads/%(title)s.%(ext)s",
+                "noplaylist": True,
+                "progress_hooks": [get_progress_hook(client, status_msg, user_id, "Extracting MP3")],
+                "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "192"}],
+            }
+            cookie_file = os.getenv("JIOHOTSTAR_COOKIES")
+            if cookie_file and os.path.isfile(cookie_file):
+                opts["cookiefile"] = cookie_file
+            elif os.path.isfile("cookies.txt"):
+                opts["cookiefile"] = "cookies.txt"
+            def do_download():
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    info = ydl.extract_info(url, download=True)
+                    return ydl.prepare_filename(info)
+            filename = await asyncio.to_thread(do_download)
+            mp3_path = os.path.splitext(filename)[0] + ".mp3"
+            if not os.path.isfile(mp3_path):
+                raise RuntimeError("MP3 output was not created. This stream may not provide a downloadable audio format.")
+            await status_msg.edit_text("📤 Uploading MP3 to Telegram...")
+            await client.send_audio(chat_id=callback_query.message.chat.id, audio=mp3_path, title=os.path.basename(mp3_path))
+            await status_msg.delete()
+            filename = mp3_path
+        except Exception as exc:
+            await status_msg.edit_text(f"❌ MP3 download failed: {html.escape(str(exc)[:700])}", parse_mode="html")
+        finally:
+            ACTIVE_JIO_TASKS.discard(user_id)
+            if filename and os.path.isfile(filename):
+                try: os.remove(filename)
+                except OSError: pass
+            CANCEL_REQUESTS.discard(user_id)
+
     @app.on_callback_query(filters.regex(r"^dl_final_multi\|"))
     async def download_multi_selected_media(client, callback_query: CallbackQuery):
         data_parts = callback_query.data.split("|")
@@ -457,23 +463,20 @@ def register_jiohotstar_handlers(app: Client):
             reply_markup=cancel_keyboard
         )
 
-        format_str = build_hotstar_format_selector(info, quality, selected_langs[0] if len(selected_langs) == 1 else "all")
+        audio_selector = "+".join([f"bestaudio[language={l}]" for l in selected_langs])
+        format_str = f'bestvideo[height<={quality}]+({audio_selector})/best[height<={quality}]/best'
 
         ydl_opts = {
             'format': format_str,
             'outtmpl': 'downloads/%(title)s.%(ext)s',
             'progress_hooks': [get_progress_hook(client, status_msg, user_id, f"Downloading {quality} Video")],
-            'noplaylist': True,
-            'quiet': True,
-            'no_warnings': False,
-            'retries': 5,
-            'fragment_retries': 5,
-            'extractor_retries': 3,
         }
 
-        cookie_file_path = get_hotstar_cookie_file()
-        if cookie_file_path:
+        cookie_file_path = os.getenv("JIOHOTSTAR_COOKIES")
+        if cookie_file_path and os.path.isfile(cookie_file_path):
             ydl_opts['cookiefile'] = cookie_file_path
+        elif os.path.isfile("cookies.txt"):
+            ydl_opts['cookiefile'] = "cookies.txt"
 
         thumb_path = None
         filename = None
@@ -545,12 +548,7 @@ def register_jiohotstar_handlers(app: Client):
             if user_id in CANCEL_REQUESTS or "cancelled" in str(e).lower():
                 await status_msg.edit_text("❌ Task Cancelled successfully!")
             else:
-                error_text = str(e)
-                if "requested format is not available" in error_text.lower():
-                    error_text += "\n\nHotstar did not provide a matching downloadable format for this title. Try a lower quality, update yt-dlp, and confirm the title is playable with your own logged-in account."
-                elif "410" in error_text or "gone" in error_text.lower():
-                    error_text += "\n\nHotstar returned HTTP 410 (Gone). This is an extractor/service response, not a quality-button issue. Update yt-dlp and retry; if it persists, the title/API may currently be unavailable."
-                await status_msg.edit_text(f"❌ Download failed: {error_text[:3500]}")
+                await status_msg.edit_text(f"❌ Download failed: {str(e)}")
         finally:
             ACTIVE_JIO_TASKS.discard(user_id)
             if filename and os.path.exists(filename):
@@ -609,23 +607,22 @@ def register_jiohotstar_handlers(app: Client):
             reply_markup=cancel_keyboard
         )
 
-        format_str = build_hotstar_format_selector(info, quality, selected_audio)
+        if selected_audio == "all":
+            format_str = f'bestvideo[height<={quality}]+bestaudio/best[height<={quality}]/best'
+        else:
+            format_str = f'bestvideo[height<={quality}]+bestaudio[language={selected_audio}]/best[height<={quality}]/best'
 
         ydl_opts = {
             'format': format_str,
             'outtmpl': 'downloads/%(title)s.%(ext)s',
             'progress_hooks': [get_progress_hook(client, status_msg, user_id, f"Downloading {quality} Video")],
-            'noplaylist': True,
-            'quiet': True,
-            'no_warnings': False,
-            'retries': 5,
-            'fragment_retries': 5,
-            'extractor_retries': 3,
         }
 
-        cookie_file_path = get_hotstar_cookie_file()
-        if cookie_file_path:
+        cookie_file_path = os.getenv("JIOHOTSTAR_COOKIES")
+        if cookie_file_path and os.path.isfile(cookie_file_path):
             ydl_opts['cookiefile'] = cookie_file_path
+        elif os.path.isfile("cookies.txt"):
+            ydl_opts['cookiefile'] = "cookies.txt"
 
         thumb_path = None
         filename = None
@@ -696,12 +693,7 @@ def register_jiohotstar_handlers(app: Client):
             if user_id in CANCEL_REQUESTS or "cancelled" in str(e).lower():
                 await status_msg.edit_text("❌ Task Cancelled successfully!")
             else:
-                error_text = str(e)
-                if "requested format is not available" in error_text.lower():
-                    error_text += "\n\nHotstar did not provide a matching downloadable format for this title. Try a lower quality, update yt-dlp, and confirm the title is playable with your own logged-in account."
-                elif "410" in error_text or "gone" in error_text.lower():
-                    error_text += "\n\nHotstar returned HTTP 410 (Gone). This is an extractor/service response, not a quality-button issue. Update yt-dlp and retry; if it persists, the title/API may currently be unavailable."
-                await status_msg.edit_text(f"❌ Download failed: {error_text[:3500]}")
+                await status_msg.edit_text(f"❌ Download failed: {str(e)}")
         finally:
             ACTIVE_JIO_TASKS.discard(user_id)
             if filename and os.path.exists(filename):
