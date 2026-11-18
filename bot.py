@@ -304,8 +304,22 @@ def human_bytes(size):
         i += 1
     return f"{size:.2f} {units[i]}"
 
+def get_cookie_file_for_url(url):
+    """Return the user-provided Netscape cookies file for the target service."""
+    host = (url or "").lower()
+    if "instagram.com" in host or "instagr.am" in host:
+        candidates = [os.environ.get("INSTAGRAM_COOKIES"), "instagram_com_cookies.txt", os.environ.get("COOKIES_FILE"), "cookies.txt"]
+    elif any(domain in host for domain in ("hotstar.com", "jiocinema.com", "jiohotstar.com")):
+        candidates = [os.environ.get("JIOHOTSTAR_COOKIES"), os.environ.get("COOKIES_FILE"), "cookies.txt"]
+    else:
+        candidates = [os.environ.get("YOUTUBE_COOKIES"), "youtube_cookies.txt", os.environ.get("COOKIES_FILE"), "cookies.txt"]
+    for candidate in candidates:
+        if candidate and os.path.isfile(candidate) and os.path.getsize(candidate) > 0:
+            return candidate
+    return None
+
 def get_youtube_cookie_file():
-    return "youtube_cookies.txt" if os.path.isfile("youtube_cookies.txt") else None
+    return get_cookie_file_for_url("https://www.youtube.com/")
 
 def is_premium(user_id):
     if user_id == ADMIN_ID:
@@ -412,7 +426,7 @@ async def download_thumbnail_from_source(client, thumb_source, user_id):
     return None
 
 def download_instagram_photos(url, download_path):
-    cookie_file_path = "instagram_com_cookies.txt" if os.path.exists("instagram_com_cookies.txt") else "cookies.txt"
+    cookie_file_path = get_cookie_file_for_url(url)
     ydl_opts = {
         "outtmpl": os.path.join(download_path, "%(id)s_%(autonumber)03d.%(ext)s"),
         "quiet": True,
@@ -428,10 +442,20 @@ def download_instagram_photos(url, download_path):
         "cookiefile": cookie_file_path if os.path.exists(cookie_file_path) else None,
     }
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        if not info:
-            raise RuntimeError("Instagram did not return downloadable post information.")
+    try:
+        info, _effective_opts = extract_info_with_cookie_fallback(
+            yt_dlp, url, ydl_opts, download=True
+        )
+    except Exception as exc:
+        message = str(exc)
+        if "empty media response" in message.lower() or "login" in message.lower() or "cookies" in message.lower():
+            raise RuntimeError(
+                "Instagram did not provide media to this session. The post may require a valid, refreshed Instagram cookies file, "
+                "or it may be private/unavailable. Set INSTAGRAM_COOKIES to your own Netscape-format cookies file and try again."
+            ) from exc
+        raise
+    if not info:
+        raise RuntimeError("Instagram did not return downloadable post information.")
 
     image_extensions = {".jpg", ".jpeg", ".png", ".webp"}
     images = []
@@ -1714,7 +1738,7 @@ async def auto_media_link(client: Client, message: Message):
                 'no_warnings': True,
                 'skip_download': True,
                 'noplaylist': True,
-                'cookiefile': cookie_file_path if os.path.exists(cookie_file_path) else None,
+                'cookiefile': cookie_file_path,
                 'nocheckcertificate': True
             }
 
@@ -1851,11 +1875,14 @@ async def process_download(client, status_msg, user_id, user_name, url, custom_n
             [InlineKeyboardButton("✖️ Task Cancel", callback_data=f"cancel_dl_{user_id}")]
         ])
 
-        cookie_file_path = get_youtube_cookie_file()
+        cookie_file_path = get_cookie_file_for_url(url)
 
         try:
             def fetch_thumbnail_metadata():
-                with yt_dlp.YoutubeDL({'quiet': True, 'skip_download': True, 'nocheckcertificate': True, 'cookiefile': cookie_file_path}) as ydl_thumb:
+                thumb_opts = {'quiet': True, 'skip_download': True, 'nocheckcertificate': True}
+                if cookie_file_path:
+                    thumb_opts['cookiefile'] = cookie_file_path
+                with yt_dlp.YoutubeDL(thumb_opts) as ydl_thumb:
                     return ydl_thumb.extract_info(url, download=False)
 
             info_thumb = await asyncio.to_thread(fetch_thumbnail_metadata)

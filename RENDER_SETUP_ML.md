@@ -22,3 +22,13 @@
 - Render-ന്റെ സാധാരണ filesystem സ്ഥിരമായ storage അല്ല; GoFile tracker പോലുള്ള local data restart/redeploy കഴിഞ്ഞും വേണമെങ്കിൽ persistent disk/external storage വേണം.
 - ZIP-ൽ `cookies.txt`, `instagram_com_cookies.txt`, `terabox.app_cookies.txt` ഉണ്ട്. ഇവയിൽ login/session വിവരങ്ങൾ ഉണ്ടായേക്കാം. Public GitHub-ൽ ഇടരുത്; Private repo മാത്രം ഉപയോഗിക്കുക. ഇതിനകം public ആയി പോയിട്ടുണ്ടെങ്കിൽ ബന്ധപ്പെട്ട sessions revoke/refresh ചെയ്യുക.
 - Bot token/API hash/cookies ആരുമായും പങ്കിടരുത്.
+
+## Private account cookies (Hotstar / Instagram)
+
+Some Hotstar videos are restricted to registered users, and some Instagram posts require a logged-in account. The bot cannot bypass those access controls. Export your own cookies in **Netscape cookies.txt format** from an account that is permitted to view the content, then provide the file privately on the server:
+
+- Hotstar: set `JIOHOTSTAR_COOKIES` to the cookie-file path, or place your file at `cookies.txt`.
+- Instagram: set `INSTAGRAM_COOKIES` to the cookie-file path, or place your file at `instagram_com_cookies.txt`.
+- General fallback: `COOKIES_FILE` can point to a shared cookie file; `YOUTUBE_COOKIES` is available for YouTube.
+
+Keep cookie files private, never commit or share them, and refresh them when they expire. The patched ZIP intentionally excludes cookie files from the original upload so account session credentials are not redistributed. If a post is private, deleted, age/region restricted, or unavailable to the logged-in account, the bot still cannot download it. Keep yt-dlp updated to the latest version.

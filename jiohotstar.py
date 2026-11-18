@@ -15,6 +15,13 @@ from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQ
 
 logger = logging.getLogger(__name__)
 
+def get_hotstar_cookie_file():
+    """Use cookies explicitly supplied by the bot owner; never bypass login/DRM."""
+    for candidate in (os.environ.get("JIOHOTSTAR_COOKIES"), os.environ.get("COOKIES_FILE"), "cookies.txt"):
+        if candidate and os.path.isfile(candidate) and os.path.getsize(candidate) > 0:
+            return candidate
+    return None
+
 # ജിയോ ഹോസ്റ്റാർ പ്രീമിയം ആക്സസ് ഉള്ള യൂസർമാരുടെ IDs ഉം ആക്ടീവ് ടാസ്കുകളും
 JIO_PREMIUM_USERS = set()
 ACTIVE_JIO_TASKS = set()
@@ -171,7 +178,7 @@ def register_jiohotstar_handlers(app: Client):
 
             status_msg = await message.reply_text("⏳ Fetching video info, thumbnail & auto-detecting audio languages...")
 
-            cookie_file_path = "cookies.txt" if os.path.exists("cookies.txt") else None
+            cookie_file_path = get_hotstar_cookie_file()
 
             try:
                 ydl_opts = {
@@ -400,8 +407,9 @@ def register_jiohotstar_handlers(app: Client):
             'progress_hooks': [get_progress_hook(client, status_msg, user_id, f"Downloading {quality} Video")],
         }
 
-        if os.path.exists("cookies.txt"):
-            ydl_opts['cookiefile'] = "cookies.txt"
+        cookie_file_path = get_hotstar_cookie_file()
+        if cookie_file_path:
+            ydl_opts['cookiefile'] = cookie_file_path
 
         thumb_path = None
         filename = None
@@ -543,8 +551,9 @@ def register_jiohotstar_handlers(app: Client):
             'progress_hooks': [get_progress_hook(client, status_msg, user_id, f"Downloading {quality} Video")],
         }
 
-        if os.path.exists("cookies.txt"):
-            ydl_opts['cookiefile'] = "cookies.txt"
+        cookie_file_path = get_hotstar_cookie_file()
+        if cookie_file_path:
+            ydl_opts['cookiefile'] = cookie_file_path
 
         thumb_path = None
         filename = None
