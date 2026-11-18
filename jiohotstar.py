@@ -233,10 +233,14 @@ def register_jiohotstar_handlers(app: Client, premium_check=None, admin_ids=None
                 await message.reply_text("⚠️ Task Limit Reached! You can download only one JioHotstar video at a time. Please wait for your current task to finish.")
                 return
 
-            # -n ഉപയോഗിച്ച് കസ്റ്റം നെയിം എടുക്കുന്നു
-            parts = text.split("-n")
-            url = url_match.group(0) if url_match else parts[0].strip()
-            custom_name = parts[1].strip() if len(parts) > 1 else None
+            # Parse -n only when it is a standalone option after the URL.
+            # Do not split the URL itself: URL paths/query strings may contain similar text.
+            name_match = re.search(r"(?:^|\s)-n(?:\s+|=)(.+?)\s*$", text, flags=re.IGNORECASE)
+            url = url_match.group(0).rstrip(".,)") if url_match else text.strip()
+            custom_name = name_match.group(1).strip() if name_match else None
+            if custom_name:
+                # Remove the -n option from the URL text only; preserve the exact supplied name.
+                custom_name = re.sub(r"\s+", " ", custom_name).strip()
 
             status_msg = await message.reply_text("⏳ Fetching video info, thumbnail & auto-detecting audio languages...")
 
